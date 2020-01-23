@@ -1,0 +1,107 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            steps {
+
+                dir('imtui') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [
+                            [name: '*/master']
+                        ],
+                        browser: [$class: 'BitbucketWeb', repoUrl: 'https://bitbucket.org/procurement_zycus/imtui'],
+                        userRemoteConfigs: [
+                            [credentialsId: '50487a14-946d-4461-a0a2-55a2039bf185', url: 'https://shadabzycus@bitbucket.org/procurement_zycus/imtui.git']
+                        ]
+                    ])
+                }
+                dir('imtjs') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [
+                            [name: '*/master']
+                        ],
+                        browser: [$class: 'BitbucketWeb', repoUrl: 'https://bitbucket.org/procurement_zycus/imtjs'],
+                        userRemoteConfigs: [
+                            [credentialsId: '50487a14-946d-4461-a0a2-55a2039bf185', url: 'https://shadabzycus@bitbucket.org/procurement_zycus/imtjs.git']
+                        ]
+                    ])
+                }
+                dir('imtservice') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [
+                            [name: '*/master']
+                        ],
+                        browser: [$class: 'BitbucketWeb', repoUrl: 'https://bitbucket.org/procurement_zycus/imtservice'],
+                        userRemoteConfigs: [
+                            [credentialsId: '50487a14-946d-4461-a0a2-55a2039bf185', url: 'https://shadabzycus@bitbucket.org/procurement_zycus/imtservice.git']
+                        ]
+                    ])
+                }
+
+            }
+        }
+
+        stage('BuildMaven') {
+            tools {
+                maven 'Maven 3.5.0'
+            }
+            steps {
+                sh 'mvn -P dev  -f imtservice/pom.xml -B -DskipTests clean package'
+            }
+        }
+
+        stage('NodeJS') {
+            tools {
+                nodejs 'NodeJS 8'
+            }
+            steps {
+                dir('imtjs') {
+                    sh "npm install"
+                    sh "npm run build"
+                    sh 'mkdir ../imtjs_backup'
+                    sh 'mv * ../imtjs_backup'
+                    sh 'mv ../imtjs_backup/dist ./'
+                    sh 'mv ../imtjs_backup/build.xml ./'
+                    sh 'rm -rf ../imtjs_backup'
+                }
+            }
+        }
+
+        stage('Build') {
+            tools {
+                jdk 'JDK 8u101'
+                ant 'ANT 1.8.2'
+				maven 'Maven 3.5.0'
+            }
+            steps {
+                sh 'ant -f imtui/build.xml buildFinal'
+                writeFile file: 'buildVersion.txt', text: """
+                    build.name=${env.JOB_NAME}
+                    build.number=${env.BUILD_ID}
+                    build.date=${env.BUILD_TIMESTAMP}
+                """
+                sh 'mv imtservice/target/*.jar imtservice/'
+                sh 'zip -g dist/build.zip buildVersion.txt imtservice/*.jar imtservice/releaseVersion.properties'
+                sh 'cat buildVersion.txt >> imtservice/releaseVersion.properties'
+                archiveArtifacts 'dist/build.zip'
+            }
+        }
+
+        stage('Deploy') {
+            when {
+                environment name: 'Deploy', value: 'true'
+                expression {
+                    currentBuild.getResult() != 'UNSTABLE'
+                }
+            }
+            steps {
+                sh 'scp dist/build.zip pranavm@192.168.1.186:/u01/IMT/dist/'
+                sh 'ssh pranavm@192.168.1.186 /u01/eprocdev/AUTOBUILD/imtdev.sh' 
+            }
+        }
+    }
+}
